@@ -10,6 +10,7 @@ import { registerStrategyTools } from "./tools/strategy.js";
 import { registerGrowthTools } from "./tools/growth.js";
 import { registerCommentTools } from "./tools/comments.js";
 import { registerReelUploadTools } from "./tools/reels-upload.js";
+import { registerMessengerTools } from "./tools/messenger.js";
 
 function buildServer() {
   const server = new McpServer({
@@ -24,6 +25,7 @@ function buildServer() {
   registerGrowthTools(server);
   registerCommentTools(server);
   registerReelUploadTools(server);
+  registerMessengerTools(server);
 
   return server;
 }

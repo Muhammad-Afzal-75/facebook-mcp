@@ -248,4 +248,40 @@ export const facebook = {
       ...(isScheduled ? { scheduled_publish_time: options.scheduledPublishTime } : {}),
     });
   },
+
+  // --- Messenger -------------------------------------------------------
+  // Requires the pages_messaging permission. Facebook enforces the
+  // 24-hour standard messaging window server-side — sendMessage will
+  // fail on its own if the person hasn't messaged the Page recently;
+  // we don't need to track that ourselves.
+  async getConversations(limit = 25) {
+    return graphGet(`/${PAGE_ID}/conversations`, {
+      fields: "id,updated_time,snippet,participants",
+      limit,
+    });
+  },
+
+  async getMessages(conversationId: string, limit = 25) {
+    return graphGet(`/${conversationId}/messages`, {
+      fields: "id,message,from,created_time",
+      limit,
+    });
+  },
+
+  async draftMessageReply(recipientId: string, message: string) {
+    return {
+      status: "draft",
+      recipientId,
+      preview: { message },
+      note: "This is a draft only. Call send_message to actually send it.",
+    };
+  },
+
+  async sendMessage(recipientId: string, message: string) {
+    return graphPost(`/me/messages`, {
+      recipient: JSON.stringify({ id: recipientId }),
+      message: JSON.stringify({ text: message }),
+      messaging_type: "RESPONSE",
+    });
+  },
 };
