@@ -1,0 +1,180 @@
+import "dotenv/config";
+
+// Meta retired Graph API v20 in Sept 2026; v25.0 is current as of this
+// writing. Override via GRAPH_API_VERSION in .env if Meta ships a newer
+// one before you next touch this file.
+const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION || "v25.0";
+const BASE_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+
+const PAGE_ID = process.env.FACEBOOK_PAGE_ID;
+const PAGE_ACCESS_TOKEN = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
+
+function assertConfigured() {
+  if (!PAGE_ID || !PAGE_ACCESS_TOKEN) {
+    throw new Error(
+      "Missing FACEBOOK_PAGE_ID or FACEBOOK_PAGE_ACCESS_TOKEN in .env. Copy .env.example to .env and fill in your credentials."
+    );
+  }
+}
+
+type GraphParams = Record<string, string | number | boolean | undefined>;
+
+async function graphGet(path: string, params: GraphParams = {}) {
+  assertConfigured();
+  const url = new URL(`${BASE_URL}${path}`);
+  url.searchParams.set("access_token", PAGE_ACCESS_TOKEN!);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) url.searchParams.set(key, String(value));
+  }
+
+  const res = await fetch(url.toString());
+  const raw = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `Graph API GET ${path} returned a non-JSON response (HTTP ${res.status}): ${raw.slice(0, 200)}`
+    );
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      `Graph API GET ${path} failed: ${data?.error?.message || res.statusText}`
+    );
+  }
+  return data;
+}
+
+async function graphPost(path: string, body: GraphParams = {}) {
+  assertConfigured();
+  const url = new URL(`${BASE_URL}${path}`);
+  url.searchParams.set("access_token", PAGE_ACCESS_TOKEN!);
+
+  const res = await fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(
+      Object.entries(body)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)])
+    ),
+  });
+  const raw = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `Graph API POST ${path} returned a non-JSON response (HTTP ${res.status}): ${raw.slice(0, 200)}`
+    );
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      `Graph API POST ${path} failed: ${data?.error?.message || res.statusText}`
+    );
+  }
+  return data;
+}
+
+// --- Insight metric resilience -----------------------------------------
+// Meta has been deprecating/renaming Insights metrics on a rolling basis
+// (a large batch of reach/impressions metrics went invalid in June 2026).
+// Rather than hardcode one metric list and break the whole call the next
+// time Meta renames something, we try the full candidate list in one
+// request first (cheap — 1 call), and only fall back to querying metrics
+// one at a time — silently dropping whichever ones the current API
+// version rejects — if the batched call fails.
+async function graphGetResilientMetrics(
+  path: string,
+  candidateMetrics: string[],
+  extraParams: GraphParams = {}
+) {
+  try {
+    return await graphGet(path, { ...extraParams, metric: candidateMetrics.join(",") });
+  } catch {
+    const data: any[] = [];
+    const dropped: string[] = [];
+    for (const metric of candidateMetrics) {
+      try {
+        const single = await graphGet(path, { ...extraParams, metric });
+        data.push(...(single.data || []));
+      } catch {
+        dropped.push(metric);
+      }
+    }
+    return { data, _droppedMetrics: dropped };
+  }
+}
+
+// Post-level candidates. post_impressions_unique and other "unique"/reach
+// variants were deprecated Jun 2026 — deliberately not requested here.
+// post_video_views only applies to video/reel posts and is skipped
+// automatically (via the per-metric fallback) for photo/text posts.
+const POST_METRIC_CANDIDATES = [
+  "post_impressions_organic",
+  "post_impressions_paid",
+  "post_impressions_viral",
+  "post_engaged_users",
+  "post_clicks",
+  "post_reactions_by_type_total",
+  "post_video_views",
+];
+
+// Page-level candidates. page_impressions and page_fans were deprecated
+// Nov 2025 — not requested here.
+const PAGE_METRIC_CANDIDATES = [
+  "page_engaged_users",
+  "page_post_engagements",
+  "page_fan_adds",
+  "page_fan_removes",
+  "page_views_total",
+];
+
+export const facebook = {
+  pageId: PAGE_ID,
+
+  async getPageInfo() {
+    return graphGet(`/${PAGE_ID}`, {
+      fields: "id,name,fan_count,followers_count,link,about,category",
+    });
+  },
+
+  async getPagePosts(limit = 10) {
+    return graphGet(`/${PAGE_ID}/posts`, {
+      fields: "id,message,created_time,permalink_url,attachments{media_type,type}",
+      limit,
+    });
+  },
+
+  async getPostInsights(postId: string) {
+    return graphGetResilientMetrics(`/${postId}/insights`, POST_METRIC_CANDIDATES);
+  },
+
+  async getPageInsights(metric?: string, period = "day") {
+    const candidates = metric ? metric.split(",") : PAGE_METRIC_CANDIDATES;
+    return graphGetResilientMetrics(`/${PAGE_ID}/insights`, candidates, { period });
+  },
+
+  async getReels(limit = 10) {
+    return graphGet(`/${PAGE_ID}/video_reels`, {
+      fields: "id,description,created_time,permalink_url",
+      limit,
+    });
+  },
+
+  async createDraftPost(message: string, link?: string) {
+    // Local "draft" — does NOT call the Graph API. Just returns a preview
+    // object so a human (or Claude) can review before publishing.
+    return {
+      status: "draft",
+      preview: { message, link: link || null },
+      note: "This is a draft only. Call publish_post to actually post it.",
+    };
+  },
+
+  async publishPost(message: string, link?: string) {
+    return graphPost(`/${PAGE_ID}/feed`, { message, link });
+  },
+};
