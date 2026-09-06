@@ -52,9 +52,15 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
     return next();
   }
   const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const headerToken = header.startsWith("Bearer ") ? header.slice(7) : null;
+  // Fallback for clients (like claude.ai's web custom-connector UI) that
+  // can only send a plain URL with no custom header field. Less safe than
+  // a header (URLs can end up in logs/history), but far safer than no
+  // auth at all. Prefer the header when a client can send one.
+  const queryToken = typeof req.query.token === "string" ? req.query.token : null;
+  const token = headerToken || queryToken;
   if (token !== MCP_AUTH_TOKEN) {
-    res.status(401).json({ error: "Unauthorized: missing or invalid Bearer token" });
+    res.status(401).json({ error: "Unauthorized: missing or invalid token" });
     return;
   }
   next();
