@@ -177,4 +177,75 @@ export const facebook = {
   async publishPost(message: string, link?: string) {
     return graphPost(`/${PAGE_ID}/feed`, { message, link });
   },
+
+  async getComments(postId: string, limit = 25) {
+    return graphGet(`/${postId}/comments`, {
+      fields: "id,message,from,created_time,like_count,comment_count",
+      limit,
+      order: "reverse_chronological",
+    });
+  },
+
+  async draftCommentReply(commentId: string, message: string) {
+    // Local preview only — does NOT call the Graph API.
+    return {
+      status: "draft",
+      commentId,
+      preview: { message },
+      note: "This is a draft only. Call reply_to_comment to actually post it.",
+    };
+  },
+
+  async replyToComment(commentId: string, message: string) {
+    // Requires the pages_manage_engagement permission on the Page token.
+    return graphPost(`/${commentId}/comments`, { message });
+  },
+
+  // --- Reels upload/scheduling --------------------------------------
+  // 3-phase resumable upload: start -> transfer -> finish. We use the
+  // "file_url" transfer method (Facebook fetches the video itself from
+  // a public URL) instead of proxying raw video bytes through our own
+  // server — simpler and avoids request-size limits.
+  async startReelUpload() {
+    // Returns { video_id, upload_url }
+    return graphPost(`/${PAGE_ID}/video_reels`, { upload_phase: "start" });
+  },
+
+  async transferReelVideoFromUrl(uploadUrl: string, videoUrl: string) {
+    const res = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `OAuth ${PAGE_ACCESS_TOKEN}`,
+        file_url: videoUrl,
+      },
+    });
+    const raw = await res.text();
+    let data: any;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error(
+        `Reel video transfer returned a non-JSON response (HTTP ${res.status}): ${raw.slice(0, 200)}`
+      );
+    }
+    if (!res.ok) {
+      throw new Error(`Reel video transfer failed: ${data?.error?.message || res.statusText}`);
+    }
+    return data;
+  },
+
+  async finishReelUpload(
+    videoId: string,
+    description: string,
+    options: { scheduledPublishTime?: number } = {}
+  ) {
+    const isScheduled = !!options.scheduledPublishTime;
+    return graphPost(`/${PAGE_ID}/video_reels`, {
+      upload_phase: "finish",
+      video_id: videoId,
+      description,
+      video_state: isScheduled ? "SCHEDULED" : "PUBLISHED",
+      ...(isScheduled ? { scheduled_publish_time: options.scheduledPublishTime } : {}),
+    });
+  },
 };
