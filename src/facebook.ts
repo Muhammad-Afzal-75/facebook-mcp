@@ -110,12 +110,14 @@ async function graphGetResilientMetrics(
 
 // Post-level candidates. post_impressions_unique and other "unique"/reach
 // variants were deprecated Jun 2026 — deliberately not requested here.
-// post_video_views only counts views 3s+ and undercounts Reels significantly.
-// blue_reels_play_count is the actual Reels "Plays" metric shown in the
-// Professional Dashboard / reel grid — this is what matches what the user
-// sees in the app, so it's requested alongside post_video_views.
-// Both only apply to video/reel posts and are skipped automatically (via
-// the per-metric fallback) for photo/text posts.
+// post_video_views only counts views 3s+ and undercounts Reels significantly
+// — it's kept only as a last-resort fallback. It is NOT the "Plays" number
+// shown in the app's reel grid / Professional Dashboard; that number comes
+// from blue_reels_play_count, which Meta only exposes on the underlying
+// video object's /video_insights edge (see REEL_METRIC_CANDIDATES below),
+// not on the post's own /insights edge — confirmed Sep 2026 against Meta's
+// Video Insights docs after blue_reels_play_count silently returned no
+// data when requested here.
 const POST_METRIC_CANDIDATES = [
   "post_impressions_organic",
   "post_impressions_paid",
@@ -124,8 +126,12 @@ const POST_METRIC_CANDIDATES = [
   "post_clicks",
   "post_reactions_by_type_total",
   "post_video_views",
-  "blue_reels_play_count",
 ];
+
+// Reel-level candidates, queried against /{video-id}/video_insights (the
+// video object, not the post). blue_reels_play_count is the "Plays" count
+// shown in the app's reel grid / Professional Dashboard.
+const REEL_METRIC_CANDIDATES = ["blue_reels_play_count", "fb_reels_replay_count"];
 
 // Page-level candidates. page_impressions and page_fans were deprecated
 // Nov 2025 — not requested here.
@@ -148,13 +154,33 @@ export const facebook = {
 
   async getPagePosts(limit = 10) {
     return graphGet(`/${PAGE_ID}/posts`, {
-      fields: "id,message,created_time,permalink_url,attachments{media_type,type}",
+      fields: "id,message,created_time,permalink_url,attachments{media_type,type,target}",
       limit,
     });
   },
 
+  // Reels' real "Plays" count only lives on the underlying video object's
+  // /video_insights edge, not on the post's own /insights edge. We resolve
+  // the video ID from the post's attachment target, then query it
+  // separately and merge the result into the post-level insights so
+  // callers (analyze_content, growth tools, get_post_insights) don't need
+  // to know about the split.
   async getPostInsights(postId: string) {
-    return graphGetResilientMetrics(`/${postId}/insights`, POST_METRIC_CANDIDATES);
+    const postInsights = await graphGetResilientMetrics(`/${postId}/insights`, POST_METRIC_CANDIDATES);
+    try {
+      const post = await graphGet(`/${postId}`, { fields: "attachments{media_type,type,target}" });
+      const videoId = post?.attachments?.data?.[0]?.target?.id;
+      if (videoId) {
+        const reelInsights = await graphGetResilientMetrics(`/${videoId}/video_insights`, REEL_METRIC_CANDIDATES);
+        if (reelInsights?.data?.length) {
+          return { data: [...(postInsights.data || []), ...reelInsights.data] };
+        }
+      }
+    } catch {
+      // Not a video/reel post, or the attachment has no linked video
+      // object — fall back to post-level insights only.
+    }
+    return postInsights;
   },
 
   async getPageInsights(metric?: string, period = "day") {
