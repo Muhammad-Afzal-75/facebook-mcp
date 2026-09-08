@@ -46,6 +46,11 @@ function sumMetricValue(insightsData: any, metricName: string): number {
 }
 
 function extractViews(insightsData: any): number {
+  // blue_reels_play_count is the actual Reels "Plays" count shown in the
+  // Professional Dashboard — prefer it over post_video_views, which only
+  // counts 3s+ views and significantly undercounts Reels.
+  const reelsPlays = sumMetricValue(insightsData, "blue_reels_play_count");
+  if (reelsPlays > 0) return reelsPlays;
   const videoViews = sumMetricValue(insightsData, "post_video_views");
   if (videoViews > 0) return videoViews;
   return (

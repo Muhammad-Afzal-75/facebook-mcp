@@ -110,8 +110,12 @@ async function graphGetResilientMetrics(
 
 // Post-level candidates. post_impressions_unique and other "unique"/reach
 // variants were deprecated Jun 2026 — deliberately not requested here.
-// post_video_views only applies to video/reel posts and is skipped
-// automatically (via the per-metric fallback) for photo/text posts.
+// post_video_views only counts views 3s+ and undercounts Reels significantly.
+// blue_reels_play_count is the actual Reels "Plays" metric shown in the
+// Professional Dashboard / reel grid — this is what matches what the user
+// sees in the app, so it's requested alongside post_video_views.
+// Both only apply to video/reel posts and are skipped automatically (via
+// the per-metric fallback) for photo/text posts.
 const POST_METRIC_CANDIDATES = [
   "post_impressions_organic",
   "post_impressions_paid",
@@ -120,6 +124,7 @@ const POST_METRIC_CANDIDATES = [
   "post_clicks",
   "post_reactions_by_type_total",
   "post_video_views",
+  "blue_reels_play_count",
 ];
 
 // Page-level candidates. page_impressions and page_fans were deprecated
